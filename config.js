@@ -9,5 +9,5 @@
 window.APP_CONFIG = {
   bucket: "D6nggBKozgz4G6KNT1ha5A",
   prefix: "sd:",
-  apiBase: "https://apps-backend-tahqeeq.vercel.app"
+  apiBase: "https://apps-backend.abdulrahman-dogar.workers.dev"
 };
