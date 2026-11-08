@@ -1,22 +1,29 @@
 /* SecretDrop — client-side encrypted, self-destructing secrets.
  *
- * Security model (honest, demo build):
+ * Security model:
  *  - Every secret is encrypted in the browser with a fresh random AES-256-GCM
  *    key. The plaintext never leaves the browser unencrypted.
  *  - The key lives ONLY in the URL fragment (#k=...). Fragments are never sent
- *    in HTTP requests, and this app never stores the key in localStorage.
+ *    in HTTP requests, and this app never stores the key anywhere.
  *  - With a password, the data key is wrapped with a PBKDF2-derived key
  *    (250,000 iterations, SHA-256, random salt) and the key is NOT in the link.
- *  - The encrypted record lives in localStorage in THIS browser only. That is
- *    the demo store. There is no server, so a link only works on the same
- *    browser / device that created it, and "burning" means deleting the
- *    localStorage record. A production version needs a server store.
+ *  - The encrypted record lives on the SERVER (KVdb via window.KVStore, or a
+ *    self-hosted backend when APP_CONFIG.apiBase is set), so a link works on
+ *    any device. The server only ever receives ciphertext. Burning means
+ *    deleting the server record.
+ *  - "My secrets" is a LOCAL index (localStorage, metadata only: id,
+ *    createdAt, expiryLabel) of secrets created in this browser — the server
+ *    cannot list keys, so only secrets created here can be listed here.
  */
 "use strict";
 
-var STORE_PREFIX = "secretdrop:";
+var FALLBACK_CONFIG = { bucket: "D6nggBKozgz4G6KNT1ha5A", prefix: "sd:", apiBase: "" };
+if (typeof window !== "undefined" && window.KVStore && window.KVStore.configure) {
+  window.KVStore.configure(window.APP_CONFIG || FALLBACK_CONFIG);
+}
 var PBKDF2_ITERATIONS = 250000;
 var MAX_CHARS = 10000;
+var INDEX_KEY = "secretdrop:my-index:v1";
 
 /* ---------- tiny DOM helpers ---------- */
 function $(id) { return document.getElementById(id); }
@@ -92,43 +99,72 @@ function derivePasswordKey(password, saltBuf) {
     });
 }
 
-/* ---------- localStorage store (demo only) ---------- */
-function storeKey(id) { return STORE_PREFIX + id; }
+/* ---------- server store (KVStore) + local metadata index ---------- */
+function kv() { return window.KVStore; }
+
 function saveRecord(rec) {
-  try { localStorage.setItem(storeKey(rec.id), JSON.stringify(rec)); return true; }
-  catch (e) { return false; }
+  // PUT the encrypted record under the secret id. Resolves true on success.
+  return kv().put(rec.id, rec);
 }
 function loadRecord(id) {
-  try {
-    var raw = localStorage.getItem(storeKey(id));
-    if (!raw) return null;
-    var rec = JSON.parse(raw);
+  return kv().get(id).then(function (rec) {
     if (!rec || rec.v !== 1 || typeof rec.data !== "string") return null;
     return rec;
-  } catch (e) { return null; }
+  });
 }
 function deleteRecord(id) {
-  try { localStorage.removeItem(storeKey(id)); } catch (e) { /* storage unavailable */ }
-}
-function listRecords() {
-  var out = [];
-  try {
-    for (var i = 0; i < localStorage.length; i++) {
-      var k = localStorage.key(i);
-      if (k && k.indexOf(STORE_PREFIX) === 0) {
-        var rec = loadRecord(k.slice(STORE_PREFIX.length));
-        if (rec) out.push(rec);
-      }
-    }
-  } catch (e) { /* storage unavailable */ }
-  out.sort(function (a, b) { return b.createdAt - a.createdAt; });
-  return out;
+  removeFromIndex(id);
+  return kv().del(id);
 }
 function isExpired(rec) {
   return !!(rec.expiresAt && Date.now() > rec.expiresAt);
 }
+
+/* Local index: metadata ONLY (no ciphertext, no key) for secrets this
+ * browser created, so "My secrets" can list them. The server cannot list
+ * keys, so this list is honestly "created in this browser". */
+var memoryIndex = [];
+function loadIndex() {
+  try {
+    var raw = localStorage.getItem(INDEX_KEY);
+    if (!raw) return [];
+    var parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) { return memoryIndex.slice(); }
+}
+function saveIndex(entries) {
+  memoryIndex = entries.slice();
+  try { localStorage.setItem(INDEX_KEY, JSON.stringify(entries)); } catch (e) { /* keep in-memory copy */ }
+}
+function addToIndex(rec) {
+  var entries = loadIndex().filter(function (e) { return e.id !== rec.id; });
+  entries.unshift({
+    id: rec.id, createdAt: rec.createdAt, expiresAt: rec.expiresAt,
+    expiryLabel: rec.expiryLabel, hasPassword: !!rec.hasPassword,
+    maxViews: rec.maxViews || null, views: rec.views || 0
+  });
+  saveIndex(entries);
+}
+function removeFromIndex(id) {
+  saveIndex(loadIndex().filter(function (e) { return e.id !== id; }));
+}
+function updateIndexViews(id, views) {
+  var entries = loadIndex();
+  var changed = false;
+  entries.forEach(function (e) { if (e.id === id) { e.views = views; changed = true; } });
+  if (changed) saveIndex(entries);
+}
 function pruneExpired() {
-  listRecords().forEach(function (rec) { if (isExpired(rec)) deleteRecord(rec.id); });
+  // Delete expired records from the server, using the local index.
+  var now = Date.now();
+  var entries = loadIndex();
+  var expired = entries.filter(function (e) { return e.expiresAt && now > e.expiresAt; });
+  if (!expired.length) return Promise.resolve();
+  return Promise.all(expired.map(function (e) { return kv().del(e.id); }))
+    .then(function () {
+      saveIndex(loadIndex().filter(function (e) { return !(e.expiresAt && Date.now() > e.expiresAt); }));
+    })
+    .catch(function () { /* server unreachable — keep the index, retry later */ });
 }
 
 /* ---------- formatting ---------- */
@@ -269,18 +305,26 @@ function onCreateSubmit(event) {
         maxViews: expiry === "one-view" ? 1 : null,
         views: 0, expiryLabel: expiryLabelFor(expiry)
       };
-      if (!saveRecord(rec)) {
-        throw new Error("Could not save the encrypted secret — localStorage is unavailable or full in this browser.");
-      }
-      var link = buildLink(id, out.keyB64);
+      // Save the ciphertext to the SERVER — this is what makes the link
+      // work on any device. Only on success is the link shown.
+      return saveRecord(rec).then(function (ok) {
+        if (!ok) throw new Error("Could not reach the server — try again.");
+        addToIndex(rec);
+        return { rec: rec, keyB64: out.keyB64 };
+      });
+    })
+    .then(function (done) {
+      var rec = done.rec;
+      var link = buildLink(id, done.keyB64);
       lastCreatedLink = link;
       lastCreatedId = id;
       $("secretLink").value = link;
       $("resultMeta").textContent =
+        "Saved to server ✓ · " +
         (password ? "Password protected · " : "") +
         "Self-destructs: " + rec.expiryLabel +
         (expiresAt ? " · expires " + formatDate(expiresAt) : " · burns on first open") +
-        " · Demo: works only in this browser.";
+        " · works on any device.";
       var reminder = $("passwordReminder");
       if (password) {
         reminder.textContent = "Remember: share the password separately from the link — it is not in the link and cannot be recovered if you forget it.";
@@ -291,7 +335,7 @@ function onCreateSubmit(event) {
       renderMySecrets();
       $("secretLink").focus();
       $("secretLink").select();
-      toast("Secret link created — encrypted in your browser.");
+      toast("Secret link created — saved to server ✓");
     })
     .catch(function (err) {
       setError($("createError"), "Could not create the secret: " + (err && err.message ? err.message : "encryption failed."));
@@ -335,19 +379,23 @@ function viewerShowSecret(plaintext, rec) {
 }
 
 function burnIfNeeded(rec) {
-  // Returns true if the record was deleted by this view.
+  // Returns a Promise<boolean>: true if the record was deleted by this view.
   var nextViews = (rec.views || 0) + 1;
-  if (rec.maxViews && nextViews >= rec.maxViews) { deleteRecord(rec.id); return true; }
+  if (rec.maxViews && nextViews >= rec.maxViews) {
+    return deleteRecord(rec.id).then(function () { return true; });
+  }
   rec.views = nextViews;
-  saveRecord(rec);
-  return false;
+  updateIndexViews(rec.id, nextViews);
+  return saveRecord(rec).then(function () { return false; })
+    .catch(function () { return false; });
 }
 
 function decryptAndReveal(rec, dataKey) {
   return decryptWithKey(dataKey, rec.iv, rec.data)
     .then(function (plaintext) {
-      burnIfNeeded(rec);
-      viewerShowSecret(plaintext, rec);
+      return burnIfNeeded(rec).then(function () {
+        viewerShowSecret(plaintext, rec);
+      });
     })
     .catch(function () {
       viewerShowError(
@@ -368,55 +416,61 @@ function openSecretFromHash() {
 
   showViewerView();
   viewerShowLoading();
-  pruneExpired();
 
-  var rec = loadRecord(id);
-  if (!rec) {
-    viewerShowError(
-      "This secret has burned",
-      "It was already opened once, it expired, it was deleted by its creator, or it was never created in this browser. There is nothing left to show, and no way to recover it.",
-      "🔥"
-    );
-    return;
-  }
-  if (isExpired(rec)) {
-    deleteRecord(rec.id);
-    viewerShowError(
-      "This secret expired",
-      "Its timer (" + rec.expiryLabel + ") ran out, so it was deleted. Expired secrets cannot be recovered.",
-      "⏱️"
-    );
-    return;
-  }
-  if (!cryptoAvailable()) {
-    viewerShowError("Cannot decrypt in this browser", "WebCrypto is not available here. Try opening the link in a modern browser in a secure context.", "⚠️");
-    return;
-  }
-  pendingView = { id: id, rec: rec };
+  loadRecord(id).then(function (rec) {
+    if (!rec) {
+      viewerShowError(
+        "This secret has burned",
+        "It was already opened once, it expired, it was deleted by its creator, or it was never created. There is nothing left to show, and no way to recover it.",
+        "🔥"
+      );
+      return;
+    }
+    if (isExpired(rec)) {
+      deleteRecord(rec.id);
+      viewerShowError(
+        "This secret expired",
+        "Its timer (" + rec.expiryLabel + ") ran out, so it was deleted. Expired secrets cannot be recovered.",
+        "⏱️"
+      );
+      return;
+    }
+    if (!cryptoAvailable()) {
+      viewerShowError("Cannot decrypt in this browser", "WebCrypto is not available here. Try opening the link in a modern browser in a secure context.", "⚠️");
+      return;
+    }
+    pendingView = { id: id, rec: rec };
 
-  if (rec.hasPassword) {
-    // Password mode: no key in the link is expected. Ask for the password.
-    viewerShowPassword();
-    return;
-  }
-  if (!keyB64) {
+    if (rec.hasPassword) {
+      // Password mode: no key in the link is expected. Ask for the password.
+      viewerShowPassword();
+      return;
+    }
+    if (!keyB64) {
+      viewerShowError(
+        "This link is missing its key",
+        "The decryption key lives in the link fragment (#k=…). This link does not have one — it may have been copied incompletely. Ask the sender to resend the full link.",
+        "🔑"
+      );
+      return;
+    }
+    var keyBuf;
+    try { keyBuf = b64urlToBuf(keyB64); } catch (e) {
+      viewerShowError("This link is damaged", "The key in the link could not be read. Ask the sender to resend the full link.", "🔑");
+      return;
+    }
+    importRawKey(keyBuf)
+      .then(function (key) { return decryptAndReveal(rec, key); })
+      .catch(function () {
+        viewerShowError("This link is damaged", "The key in the link is not a valid encryption key. Ask the sender to resend the full link.", "🔑");
+      });
+  }).catch(function () {
     viewerShowError(
-      "This link is missing its key",
-      "The decryption key lives in the link fragment (#k=…). This link does not have one — it may have been copied incompletely. Ask the sender to resend the full link.",
-      "🔑"
+      "Could not reach the server",
+      "The secret could not be loaded right now — check your connection and try again. The secret has not been burned.",
+      "📡"
     );
-    return;
-  }
-  var keyBuf;
-  try { keyBuf = b64urlToBuf(keyB64); } catch (e) {
-    viewerShowError("This link is damaged", "The key in the link could not be read. Ask the sender to resend the full link.", "🔑");
-    return;
-  }
-  importRawKey(keyBuf)
-    .then(function (key) { return decryptAndReveal(rec, key); })
-    .catch(function () {
-      viewerShowError("This link is damaged", "The key in the link is not a valid encryption key. Ask the sender to resend the full link.", "🔑");
-    });
+  });
 }
 
 function onPasswordSubmit(event) {
@@ -450,36 +504,52 @@ function onPasswordSubmit(event) {
 
 /* ---------- my secrets list ---------- */
 function renderMySecrets() {
-  pruneExpired();
-  var list = listRecords();
+  var entries = loadIndex();
+  entries.sort(function (a, b) { return b.createdAt - a.createdAt; });
+  // Refresh each entry against the server so burned/expired secrets drop
+  // out of the list and the view count is the server's count. If the server
+  // cannot be reached, fall back to the local metadata as-is.
+  Promise.all(entries.map(function (entry) {
+    return loadRecord(entry.id).then(function (rec) {
+      if (!rec) return null;
+      if (isExpired(rec)) { deleteRecord(rec.id); return null; }
+      entry.views = rec.views || 0;
+      return entry;
+    }).catch(function () { return entry; });
+  })).then(function (live) {
+    var list = live.filter(function (e) { return !!e; });
+    saveIndex(list);
+    paintMySecrets(list);
+  });
+}
+function paintMySecrets(list) {
   $("mySecretsCount").textContent = String(list.length);
   var ul = $("mySecretsList");
   var empty = $("mySecretsEmpty");
   if (!list.length) { show(empty); hide(ul); ul.innerHTML = ""; return; }
   hide(empty); show(ul);
   ul.innerHTML = "";
-  list.forEach(function (rec) {
+  list.forEach(function (entry) {
     var li = document.createElement("li");
     var idSpan = document.createElement("span");
     idSpan.className = "secret-id";
-    idSpan.textContent = "#" + rec.id;
+    idSpan.textContent = "#" + entry.id;
     li.appendChild(idSpan);
 
     var meta = document.createElement("span");
     meta.className = "secret-meta";
-    var when = "Created " + formatDate(rec.createdAt);
-    var exp = rec.expiresAt ? " · expires " + formatDate(rec.expiresAt) + " (" + timeLeft(rec.expiresAt) + ")" : " · " + rec.expiryLabel;
-    var views = rec.maxViews ? " · " + rec.views + " / 1 views" : " · " + rec.views + " views";
-    meta.innerHTML = "";
+    var when = "Created " + formatDate(entry.createdAt);
+    var exp = entry.expiresAt ? " · expires " + formatDate(entry.expiresAt) + " (" + timeLeft(entry.expiresAt) + ")" : " · " + entry.expiryLabel;
+    var views = entry.maxViews ? " · " + entry.views + " / 1 views" : " · " + entry.views + " views";
     var strong = document.createElement("strong");
-    strong.textContent = rec.hasPassword ? "Password protected" : "No password";
+    strong.textContent = entry.hasPassword ? "Password protected" : "No password";
     meta.appendChild(strong);
     meta.appendChild(document.createTextNode(" — " + when + exp + views));
     li.appendChild(meta);
 
     var pill = document.createElement("span");
-    pill.className = "pill " + (rec.hasPassword ? "pill-locked" : "pill-live");
-    pill.textContent = rec.hasPassword ? "🔐 Locked" : "● Live";
+    pill.className = "pill " + (entry.hasPassword ? "pill-locked" : "pill-live");
+    pill.textContent = entry.hasPassword ? "🔐 Locked" : "● Live";
     li.appendChild(pill);
 
     var del = document.createElement("button");
@@ -487,9 +557,10 @@ function renderMySecrets() {
     del.className = "btn btn-danger-ghost btn-small";
     del.textContent = "Burn now";
     del.addEventListener("click", function () {
-      deleteRecord(rec.id);
-      renderMySecrets();
-      toast("Secret burned and deleted.");
+      deleteRecord(entry.id).then(function () {
+        renderMySecrets();
+        toast("Secret burned and deleted.");
+      });
     });
     li.appendChild(del);
     ul.appendChild(li);
@@ -561,16 +632,18 @@ function init() {
   });
   $("burnNowBtn").addEventListener("click", function () {
     if (!lastCreatedId) return;
-    deleteRecord(lastCreatedId);
-    lastCreatedId = ""; lastCreatedLink = "";
-    show($("createForm"));
-    hide($("createResult"));
-    $("secretInput").value = "";
-    $("passwordInput").value = "";
-    hide($("strengthWrap"));
-    $("charCount").textContent = "0 / 10,000";
-    renderMySecrets();
-    toast("Secret burned and deleted before anyone opened it.");
+    var id = lastCreatedId;
+    deleteRecord(id).then(function () {
+      lastCreatedId = ""; lastCreatedLink = "";
+      show($("createForm"));
+      hide($("createResult"));
+      $("secretInput").value = "";
+      $("passwordInput").value = "";
+      hide($("strengthWrap"));
+      $("charCount").textContent = "0 / 10,000";
+      renderMySecrets();
+      toast("Secret burned and deleted before anyone opened it.");
+    });
   });
   $("createAnother").addEventListener("click", function () {
     show($("createForm"));
@@ -609,6 +682,7 @@ function init() {
     setError($("createError"), "WebCrypto is not available in this browser / context. SecretDrop needs a secure context and a modern browser — try Chrome, Edge or Firefox over https, localhost, or by opening the file directly.");
   }
 
+  pruneExpired();
   // Route on load: a #s=... link opens the viewer, anything else is the creator.
   if (window.location.hash && window.location.hash.indexOf("#s=") === 0) openSecretFromHash();
   else showCreateView();
@@ -622,3 +696,16 @@ function goHome() {
 }
 
 document.addEventListener("DOMContentLoaded", init);
+
+/* Test hook (no UI effect): lets automated tests drive the real store +
+ * crypto code paths without a browser. */
+if (typeof window !== "undefined") {
+  window.SecretDrop = {
+    saveRecord: saveRecord, loadRecord: loadRecord, deleteRecord: deleteRecord,
+    isExpired: isExpired, addToIndex: addToIndex, loadIndex: loadIndex,
+    generateDataKey: generateDataKey, exportRawKey: exportRawKey,
+    importRawKey: importRawKey, encryptWithKey: encryptWithKey,
+    decryptWithKey: decryptWithKey, derivePasswordKey: derivePasswordKey,
+    newId: newId, bufToB64url: bufToB64url, b64urlToBuf: b64urlToBuf
+  };
+}

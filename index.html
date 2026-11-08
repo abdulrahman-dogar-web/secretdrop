@@ -39,7 +39,7 @@
   <div class="container">
     <div class="demo-banner" role="note">
       <span class="demo-dot" aria-hidden="true"></span>
-      <p><strong>Demo build — local only.</strong> This version stores the encrypted secret in <code>localStorage</code> in <em>this browser only</em>, so a link only opens on the same browser / device where it was created. There is no server here. A production version would need a server store to deliver links to other devices — and server-side deletion to truly burn them. <a href="#security">Read the security model →</a></p>
+      <p><strong>Server-backed.</strong> Encrypted secrets are stored on the server, so a link works on any device — not just the browser that created it. Only ciphertext is ever stored: the decryption key stays in the link fragment and is never sent to the server. <a href="#security">Read the security model →</a></p>
     </div>
   </div>
 
@@ -154,7 +154,7 @@
     <!-- How it works -->
     <div class="container section" id="how-it-works">
       <h2 class="section-title">How it works</h2>
-      <p class="section-sub">Three steps. No account, no trace left behind in this browser after the burn.</p>
+      <p class="section-sub">Three steps. No account, no trace left behind after the burn.</p>
       <div class="steps-grid">
         <article class="step-card">
           <span class="step-num">01</span>
@@ -164,12 +164,12 @@
         <article class="step-card">
           <span class="step-num">02</span>
           <h3>Share the link</h3>
-          <p>You get a link like <code>secretdrop…#s=abc123&amp;k=…</code>. The key is in the <code>#</code> fragment of the URL. Fragments are never sent to a server, never stored in this demo, and never appear in server logs.</p>
+          <p>You get a link like <code>secretdrop…#s=abc123&amp;k=…</code>. The key is in the <code>#</code> fragment of the URL. Fragments are never sent to a server, never stored, and never appear in server logs.</p>
         </article>
         <article class="step-card">
           <span class="step-num">03</span>
           <h3>It burns</h3>
-          <p>When the recipient opens the link, the browser decrypts the secret with the key from the fragment — then deletes the encrypted copy. Open it again and all you get is “burned / expired”. Time-based secrets expire on their timer instead.</p>
+          <p>When the recipient opens the link, the browser fetches the encrypted secret from the server and decrypts it with the key from the fragment — then deletes the encrypted copy from the server. Open it again and all you get is “burned / expired”. Time-based secrets expire on their timer instead.</p>
         </article>
       </div>
 
@@ -189,7 +189,7 @@
             <li>Send the link in one channel and the password (if any) in another.</li>
             <li>Tell the recipient to open it only when they are ready to copy it — one view means one chance.</li>
             <li>Do not post a one-time link in a public chat. Anyone with the link and password can open it first.</li>
-            <li>For truly sensitive material, use the production, server-backed version — not this local demo.</li>
+            <li>For truly sensitive material, remember the server stores only ciphertext — but anyone who opens the link first gets the plaintext.</li>
           </ul>
         </article>
       </div>
@@ -198,7 +198,7 @@
     <!-- Security -->
     <div class="container section" id="security">
       <h2 class="section-title">Security model — honest version</h2>
-      <p class="section-sub">What is protected, what is not, and what this demo cannot do.</p>
+      <p class="section-sub">What is protected, what is not, and what this app cannot do.</p>
       <div class="security-grid">
         <article class="sec-card good">
           <h3>✓ What this does</h3>
@@ -206,16 +206,16 @@
             <li>AES-256-GCM encryption via the browser WebCrypto API, with a fresh random key and IV for every secret.</li>
             <li>Optional password protection: the key is wrapped with a PBKDF2-derived key (250,000 iterations, SHA-256, random salt), so the link alone cannot open it.</li>
             <li>The key is only in the URL fragment (<code>#k=…</code>). Fragments are not sent in HTTP requests.</li>
-            <li>Burn-after-reading and expiry are enforced on read; burned secrets are removed from storage.</li>
+            <li>Burn-after-reading and expiry are enforced on read; burned secrets are deleted from the server.</li>
           </ul>
         </article>
         <article class="sec-card warn">
           <h3>⚠ Honest limitations</h3>
           <ul>
-            <li><strong>Local-only demo:</strong> secrets live in <code>localStorage</code> in this browser. A link only works on the same browser / device that created it. There is no server, so there is no server-side deletion.</li>
-            <li><strong>Anyone with this browser</strong> can open DevTools and read the encrypted data in <code>localStorage</code> — they still cannot read the plaintext without the key / password.</li>
-            <li><strong>Do not use this demo</strong> for real credentials, banking details, or anything whose leak would cause real harm. Use a proper server-backed secret service for that.</li>
-            <li>Clearing browser data, private mode, or a different browser will make links unreadable — that is expected for a local demo.</li>
+            <li><strong>Server-backed storage:</strong> the encrypted secret lives on the server until it burns or expires, so the link works on any device. The server only ever sees ciphertext — it never receives the key or the plaintext — but anyone with access to the server store could see (and delete) the ciphertext.</li>
+            <li><strong>Anyone with this browser</strong> can open DevTools and read the encrypted data — they still cannot read the plaintext without the key / password.</li>
+            <li><strong>Do not use this app</strong> for real credentials, banking details, or anything whose leak would cause real harm. Use a proper audited secret service for that.</li>
+            <li>“My secrets” only lists secrets created in this browser — the server cannot list keys, so a secret created on another device will not appear there (its link still works).</li>
           </ul>
         </article>
       </div>
@@ -226,7 +226,7 @@
       <div class="section-head-row">
         <div>
           <h2 class="section-title">My secrets <span class="count-pill" id="mySecretsCount">0</span></h2>
-          <p class="section-sub">Secrets created in this browser. Only metadata is shown here — never the plaintext.</p>
+          <p class="section-sub">Secrets created in this browser — a local list only. Only metadata is shown here — never the plaintext. A secret created on another device still works from its link, but will not appear in this list.</p>
         </div>
         <button type="button" class="btn btn-ghost" id="refreshMySecrets">Refresh</button>
       </div>
@@ -262,7 +262,7 @@
             <button type="button" class="btn btn-ghost" id="downloadSecretBtn">Download as .txt</button>
             <button type="button" class="btn btn-ghost" id="viewerHomeBtn">Create my own secret</button>
           </div>
-          <p class="fineprint">Copy it now. Closing this page will not bring it back — it has already been deleted from storage.</p>
+          <p class="fineprint">Copy it now. Closing this page will not bring it back — it has already been deleted from the server.</p>
         </div>
 
         <div id="viewerPassword" hidden>
@@ -287,7 +287,7 @@
           </div>
         </div>
       </div>
-      <p class="viewer-note">SecretDrop demo — local only. This link only works in the browser where the secret was created.</p>
+      <p class="viewer-note">SecretDrop — server-backed. This link works on any device; opening it burns it.</p>
     </div>
   </section>
 </main>
@@ -295,12 +295,14 @@
 <footer class="site-footer">
   <div class="container footer-inner">
     <p><strong>SecretDrop</strong> — self-destructing secrets, encrypted in your browser.</p>
-    <p class="fineprint">Demo build. No backend, no accounts, no tracking. Secrets are stored encrypted in this browser's <code>localStorage</code> only. MIT License © 2026 Mr. Abdul Rahman Dogar.</p>
+    <p class="fineprint">Server-backed. No accounts, no tracking. Secrets are stored encrypted on the server and deleted when they burn or expire. MIT License © 2026 Mr. Abdul Rahman Dogar.</p>
   </div>
 </footer>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
+<script src="config.js"></script>
+<script src="store.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
