@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="SecretDrop — share sensitive text with a self-destructing, end-to-end encrypted link. The key lives only in the link, never on a server.">
+<meta name="theme-color" content="#07070c">
+<title>SecretDrop — Self-Destructing Secrets</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold'%3E%E2%9C%95%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="bg-glow bg-glow-1" aria-hidden="true"></div>
+<div class="bg-glow bg-glow-2" aria-hidden="true"></div>
+
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="#" id="brandLink" aria-label="SecretDrop home">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.7 4.5 5.6v5.2c0 4.9 3.2 8.4 7.5 10.5 4.3-2.1 7.5-5.6 7.5-10.5V5.6L12 2.7z"/><path d="m9 11.5 2 2 4-4.5"/></svg>
+      </span>
+      <span class="brand-name">Secret<span>Drop</span></span>
+    </a>
+    <nav class="header-nav" aria-label="Main navigation">
+      <a href="#create">Create</a>
+      <a href="#how-it-works">How it works</a>
+      <a href="#security">Security</a>
+      <a href="#my-secrets">My secrets</a>
+    </nav>
+    <a class="btn btn-small btn-ghost" href="#create" id="headerCta">New secret →</a>
+  </div>
+</header>
+
+<main>
+  <!-- Demo notice: honest, always visible -->
+  <div class="container">
+    <div class="demo-banner" role="note">
+      <span class="demo-dot" aria-hidden="true"></span>
+      <p><strong>Demo build — local only.</strong> This version stores the encrypted secret in <code>localStorage</code> in <em>this browser only</em>, so a link only opens on the same browser / device where it was created. There is no server here. A production version would need a server store to deliver links to other devices — and server-side deletion to truly burn them. <a href="#security">Read the security model →</a></p>
+    </div>
+  </div>
+
+  <!-- ============ CREATE VIEW ============ -->
+  <section id="view-create" class="view view-active">
+    <div class="container hero">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="pulse-dot" aria-hidden="true"></span> End-to-end encrypted &middot; Self-destructing</p>
+        <h1>Share a secret.<br><span class="gradient-text">Then watch it burn.</span></h1>
+        <p class="lede">Paste a password, API token, private note or credential. SecretDrop encrypts it in your browser, gives you a one-time link, and destroys the secret the moment it is read — or when its timer runs out.</p>
+        <ul class="hero-points">
+          <li><strong>No account.</strong> No sign-up, no tracking, no logs.</li>
+          <li><strong>No server copy of the key.</strong> The decryption key lives only in the link fragment — it is never stored or sent anywhere.</li>
+          <li><strong>Burn after reading.</strong> One view, then it is gone for good.</li>
+        </ul>
+        <div class="hero-stats" aria-label="At a glance">
+          <div class="stat"><strong>AES-256-GCM</strong><span>WebCrypto encryption</span></div>
+          <div class="stat"><strong>0</strong><span>keys stored</span></div>
+          <div class="stat"><strong>1 view</strong><span>to burn it</span></div>
+        </div>
+      </div>
+
+      <div class="card composer" id="create">
+        <div class="card-head">
+          <h2>Create a secret</h2>
+          <span class="badge badge-secure">🔒 Encrypted in your browser</span>
+        </div>
+
+        <form id="createForm" novalidate>
+          <label class="field-label" for="secretInput">Your secret</label>
+          <textarea id="secretInput" rows="6" maxlength="10000" placeholder="Paste a password, token, private message, Wi-Fi key…" aria-describedby="charCount secretHint" required></textarea>
+          <div class="field-meta">
+            <span id="secretHint" class="hint">Never paste anything you cannot afford to lose. The secret is encrypted before it is stored.</span>
+            <span id="charCount" class="char-count">0 / 10,000</span>
+          </div>
+
+          <div class="options-grid">
+            <div class="option-block">
+              <span class="field-label" id="expiryLabel">Self-destructs</span>
+              <div class="radio-cards" role="radiogroup" aria-labelledby="expiryLabel">
+                <label class="radio-card">
+                  <input type="radio" name="expiry" value="one-view" checked>
+                  <span class="radio-title">🔥 After 1 view</span>
+                  <span class="radio-desc">Burns the first time it is opened</span>
+                </label>
+                <label class="radio-card">
+                  <input type="radio" name="expiry" value="1h">
+                  <span class="radio-title">⏱ 1 hour</span>
+                  <span class="radio-desc">Expires in 1 hour</span>
+                </label>
+                <label class="radio-card">
+                  <input type="radio" name="expiry" value="24h">
+                  <span class="radio-title">🕐 24 hours</span>
+                  <span class="radio-desc">Expires in 24 hours</span>
+                </label>
+                <label class="radio-card">
+                  <input type="radio" name="expiry" value="7d">
+                  <span class="radio-title">📅 7 days</span>
+                  <span class="radio-desc">Expires in 7 days</span>
+                </label>
+              </div>
+              <p class="hint small">Time-based secrets can be opened more than once until they expire. “After 1 view” can only ever be opened once.</p>
+            </div>
+
+            <div class="option-block">
+              <span class="field-label" id="passwordLabel">Extra protection <span class="optional">(optional)</span></span>
+              <div class="password-row">
+                <input type="password" id="passwordInput" placeholder="Add a password the recipient must enter" autocomplete="off" aria-labelledby="passwordLabel">
+                <button type="button" class="btn btn-ghost btn-small" id="togglePassword" aria-label="Show password">Show</button>
+                <button type="button" class="btn btn-ghost btn-small" id="generatePassword" title="Generate a strong random password">Generate</button>
+              </div>
+              <div class="strength" id="strengthWrap" hidden>
+                <div class="strength-bar"><span id="strengthFill"></span></div>
+                <span id="strengthText" class="hint small"></span>
+              </div>
+              <p class="hint small">If you set a password, the decryption key is <strong>not</strong> put in the link. The recipient must enter the password to open it. Share the password through a different channel than the link.</p>
+            </div>
+          </div>
+
+          <p class="form-error" id="createError" role="alert" hidden></p>
+
+          <button type="submit" class="btn btn-primary btn-large btn-block" id="createBtn">
+            <span aria-hidden="true">✦</span> Create secret link
+          </button>
+          <p class="fineprint">By creating a link you agree not to share illegal content. Nothing you type leaves this browser unencrypted.</p>
+        </form>
+
+        <!-- Result -->
+        <div class="result" id="createResult" hidden>
+          <div class="result-head">
+            <span class="result-icon" aria-hidden="true">✓</span>
+            <div>
+              <h3>Your secret link is ready</h3>
+              <p id="resultMeta" class="hint"></p>
+            </div>
+            <button type="button" class="btn btn-ghost btn-small" id="createAnother">Create another</button>
+          </div>
+          <label class="field-label" for="secretLink">One-time link — share it once, then it burns</label>
+          <div class="link-row">
+            <input type="text" id="secretLink" readonly aria-label="Secret link">
+            <button type="button" class="btn btn-primary" id="copyLinkBtn">Copy link</button>
+          </div>
+          <p class="hint small" id="passwordReminder" hidden></p>
+          <div class="result-actions">
+            <button type="button" class="btn btn-ghost" id="openLinkBtn">Open link (preview as recipient)</button>
+            <button type="button" class="btn btn-danger-ghost" id="burnNowBtn">Burn now — delete it</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- How it works -->
+    <div class="container section" id="how-it-works">
+      <h2 class="section-title">How it works</h2>
+      <p class="section-sub">Three steps. No account, no trace left behind in this browser after the burn.</p>
+      <div class="steps-grid">
+        <article class="step-card">
+          <span class="step-num">01</span>
+          <h3>Write &amp; encrypt</h3>
+          <p>You type a secret. Your browser generates a random 256-bit AES-GCM key and encrypts the text on your device — before anything is stored. The plaintext never leaves your browser.</p>
+        </article>
+        <article class="step-card">
+          <span class="step-num">02</span>
+          <h3>Share the link</h3>
+          <p>You get a link like <code>secretdrop…#s=abc123&amp;k=…</code>. The key is in the <code>#</code> fragment of the URL. Fragments are never sent to a server, never stored in this demo, and never appear in server logs.</p>
+        </article>
+        <article class="step-card">
+          <span class="step-num">03</span>
+          <h3>It burns</h3>
+          <p>When the recipient opens the link, the browser decrypts the secret with the key from the fragment — then deletes the encrypted copy. Open it again and all you get is “burned / expired”. Time-based secrets expire on their timer instead.</p>
+        </article>
+      </div>
+
+      <div class="rules-grid">
+        <article class="rule-card">
+          <h3>🔥 Burn rules, plainly</h3>
+          <ul>
+            <li><strong>After 1 view:</strong> the first successful open deletes the secret. A second open shows “burned”.</li>
+            <li><strong>1 hour / 24 hours / 7 days:</strong> the secret can be opened until the timer ends, then it is deleted and shows “expired”.</li>
+            <li><strong>Wrong password or wrong key:</strong> nothing is shown, nothing is deleted — the view does not count as a read.</li>
+            <li><strong>Burn now:</strong> the creator can delete a secret at any time from “My secrets” below.</li>
+          </ul>
+        </article>
+        <article class="rule-card">
+          <h3>💡 Share it safely</h3>
+          <ul>
+            <li>Send the link in one channel and the password (if any) in another.</li>
+            <li>Tell the recipient to open it only when they are ready to copy it — one view means one chance.</li>
+            <li>Do not post a one-time link in a public chat. Anyone with the link and password can open it first.</li>
+            <li>For truly sensitive material, use the production, server-backed version — not this local demo.</li>
+          </ul>
+        </article>
+      </div>
+    </div>
+
+    <!-- Security -->
+    <div class="container section" id="security">
+      <h2 class="section-title">Security model — honest version</h2>
+      <p class="section-sub">What is protected, what is not, and what this demo cannot do.</p>
+      <div class="security-grid">
+        <article class="sec-card good">
+          <h3>✓ What this does</h3>
+          <ul>
+            <li>AES-256-GCM encryption via the browser WebCrypto API, with a fresh random key and IV for every secret.</li>
+            <li>Optional password protection: the key is wrapped with a PBKDF2-derived key (250,000 iterations, SHA-256, random salt), so the link alone cannot open it.</li>
+            <li>The key is only in the URL fragment (<code>#k=…</code>). Fragments are not sent in HTTP requests.</li>
+            <li>Burn-after-reading and expiry are enforced on read; burned secrets are removed from storage.</li>
+          </ul>
+        </article>
+        <article class="sec-card warn">
+          <h3>⚠ Honest limitations</h3>
+          <ul>
+            <li><strong>Local-only demo:</strong> secrets live in <code>localStorage</code> in this browser. A link only works on the same browser / device that created it. There is no server, so there is no server-side deletion.</li>
+            <li><strong>Anyone with this browser</strong> can open DevTools and read the encrypted data in <code>localStorage</code> — they still cannot read the plaintext without the key / password.</li>
+            <li><strong>Do not use this demo</strong> for real credentials, banking details, or anything whose leak would cause real harm. Use a proper server-backed secret service for that.</li>
+            <li>Clearing browser data, private mode, or a different browser will make links unreadable — that is expected for a local demo.</li>
+          </ul>
+        </article>
+      </div>
+    </div>
+
+    <!-- My secrets -->
+    <div class="container section" id="my-secrets">
+      <div class="section-head-row">
+        <div>
+          <h2 class="section-title">My secrets <span class="count-pill" id="mySecretsCount">0</span></h2>
+          <p class="section-sub">Secrets created in this browser. Only metadata is shown here — never the plaintext.</p>
+        </div>
+        <button type="button" class="btn btn-ghost" id="refreshMySecrets">Refresh</button>
+      </div>
+      <div class="card table-card">
+        <div id="mySecretsEmpty" class="empty-state">
+          <p class="empty-icon" aria-hidden="true">🕳️</p>
+          <p><strong>No secrets yet in this browser.</strong></p>
+          <p class="hint">Create one above and it will appear here with its expiry and view count, until it burns or expires.</p>
+        </div>
+        <ul class="secrets-list" id="mySecretsList" hidden></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VIEWER ============ -->
+  <section id="view-viewer" class="view" hidden>
+    <div class="container viewer-wrap">
+      <div class="card viewer-card">
+        <div id="viewerLoading">
+          <div class="spinner" aria-hidden="true"></div>
+          <p>Decrypting your secret…</p>
+        </div>
+
+        <div id="viewerSecret" hidden>
+          <p class="eyebrow">🔓 Secret revealed — it has now been burned</p>
+          <h2>This secret will not be shown again</h2>
+          <p class="hint" id="viewerMeta"></p>
+          <div class="secret-box">
+            <pre id="revealedSecret"></pre>
+          </div>
+          <div class="viewer-actions">
+            <button type="button" class="btn btn-primary" id="copySecretBtn">Copy secret</button>
+            <button type="button" class="btn btn-ghost" id="downloadSecretBtn">Download as .txt</button>
+            <button type="button" class="btn btn-ghost" id="viewerHomeBtn">Create my own secret</button>
+          </div>
+          <p class="fineprint">Copy it now. Closing this page will not bring it back — it has already been deleted from storage.</p>
+        </div>
+
+        <div id="viewerPassword" hidden>
+          <p class="eyebrow">🔐 Password protected</p>
+          <h2>Enter the password to open this secret</h2>
+          <p class="hint">The sender set a password for this secret. It was not included in the link — ask the sender for it through a different channel.</p>
+          <form id="passwordForm" novalidate>
+            <label class="field-label" for="viewerPasswordInput">Password</label>
+            <input type="password" id="viewerPasswordInput" placeholder="Enter the secret password" autocomplete="off">
+            <p class="form-error" id="passwordError" role="alert" hidden></p>
+            <button type="submit" class="btn btn-primary btn-large btn-block">Unlock secret</button>
+          </form>
+          <p class="hint small">A wrong password does not burn the secret. You can try again.</p>
+        </div>
+
+        <div id="viewerError" hidden>
+          <p class="error-icon" aria-hidden="true" id="viewerErrorIcon">🔥</p>
+          <h2 id="viewerErrorTitle">This secret has burned</h2>
+          <p id="viewerErrorText">It was already opened once, or it expired — and it has been deleted. There is nothing left to show, and no way to recover it.</p>
+          <div class="viewer-actions">
+            <button type="button" class="btn btn-primary" id="errorHomeBtn">Create my own secret</button>
+          </div>
+        </div>
+      </div>
+      <p class="viewer-note">SecretDrop demo — local only. This link only works in the browser where the secret was created.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <p><strong>SecretDrop</strong> — self-destructing secrets, encrypted in your browser.</p>
+    <p class="fineprint">Demo build. No backend, no accounts, no tracking. Secrets are stored encrypted in this browser's <code>localStorage</code> only. MIT License © 2026 Mr. Abdul Rahman Dogar.</p>
+  </div>
+</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
